@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import logging
-
-from skosprovider_sqlalchemy.utils import session_factory
-
-
 log = logging.getLogger(__name__)
 
 from skosprovider.providers import VocabularyProvider
@@ -38,6 +34,14 @@ from sqlalchemy.orm.exc import (
 from skosprovider.uri import (
     DefaultUrnGenerator,
     DefaultConceptSchemeUrnGenerator
+)
+
+from skosprovider.exceptions import (
+    ResourceUnavailableException
+)
+
+from skosprovider_sqlalchemy.resources import (
+    ISQLAlchemyResource
 )
 
 
@@ -77,6 +81,7 @@ class SQLAlchemyProvider(VocabularyProvider):
         else:
             self.uri_generator = DefaultUrnGenerator(self.metadata.get('id'))
         self.session_maker = session_maker
+        self.session = None
         try:
             self.conceptscheme_id = int(metadata.get(
                 'conceptscheme_id', metadata.get('id')
@@ -97,7 +102,6 @@ class SQLAlchemyProvider(VocabularyProvider):
     def concept_scheme(self):
         return self._get_concept_scheme()
 
-    @session_factory('session_maker')
     def _get_concept_scheme(self):
         '''
         Find a :class:`skosprovider.skos.ConceptScheme` for this provider.
@@ -105,7 +109,8 @@ class SQLAlchemyProvider(VocabularyProvider):
         :param id: Id of a conceptscheme.
         :rtype: :class:`skosprovider.skos.ConceptScheme`
         '''
-        csm = self.session\
+        session = self._get_session()
+        csm = session\
                   .query(ConceptSchemeModel)\
                   .options(joinedload('labels'))\
                   .options(joinedload('notes'))\
@@ -187,10 +192,10 @@ class SQLAlchemyProvider(VocabularyProvider):
                 matches=matches
             )
 
-    @session_factory('session_maker')
     def get_by_id(self, id):
+        session = self._get_session()
         try:
-            thing = self.session\
+            thing = session\
                         .query(Thing)\
                         .options(joinedload('labels'))\
                         .options(joinedload('notes'))\
@@ -203,7 +208,6 @@ class SQLAlchemyProvider(VocabularyProvider):
             return False
         return self._from_thing(thing)
 
-    @session_factory('session_maker')
     def get_by_uri(self, uri):
         '''Get all information on a concept or collection, based on a
         :term:`URI`.
@@ -217,8 +221,9 @@ class SQLAlchemyProvider(VocabularyProvider):
             :class:`skosprovider.skos.Collection` or `False` if the concept or
             collection is unknown to the provider.
         '''
+        session = self._get_session()
         try:
-            thing = self.session\
+            thing = session\
                         .query(Thing)\
                         .options(joinedload('labels'))\
                         .options(joinedload('notes'))\
@@ -244,10 +249,10 @@ class SQLAlchemyProvider(VocabularyProvider):
             'label': l.label if l is not None else None
         }
 
-    @session_factory('session_maker')
     def find(self, query, **kwargs):
         lan = self._get_language(**kwargs)
-        q = self.session\
+        session = self._get_session()
+        q = session\
                 .query(Thing)\
                 .options(joinedload('labels'))\
                 .filter(Thing.conceptscheme_id == self.conceptscheme_id)
@@ -273,9 +278,9 @@ class SQLAlchemyProvider(VocabularyProvider):
         sort_order = self._get_sort_order(**kwargs)
         return [self._get_id_and_label(c, lan) for c in self._sort(all, sort, lan, sort_order=='desc')]
 
-    @session_factory('session_maker')
     def get_all(self, **kwargs):
-        all = self.session\
+        session = self._get_session()
+        all = session\
                   .query(Thing)\
                   .options(joinedload('labels'))\
                   .filter(Thing.conceptscheme_id == self.conceptscheme_id)\
@@ -285,9 +290,9 @@ class SQLAlchemyProvider(VocabularyProvider):
         sort_order = self._get_sort_order(**kwargs)
         return [self._get_id_and_label(c, lan) for c in self._sort(all, sort, lan, sort_order=='desc')]
 
-    @session_factory('session_maker')
     def get_top_concepts(self, **kwargs):
-        top = self.session\
+        session = self._get_session()
+        top = session\
                   .query(ConceptModel)\
                   .options(joinedload('labels'))\
                   .filter(
@@ -299,10 +304,10 @@ class SQLAlchemyProvider(VocabularyProvider):
         sort_order = self._get_sort_order(**kwargs)
         return [self._get_id_and_label(c, lan) for c in self._sort(top, sort, lan, sort_order=='desc')]
 
-    @session_factory('session_maker')
     def expand(self, id):
+        session = self._get_session()
         try:
-            thing = self.session\
+            thing = session\
                         .query(Thing)\
                         .filter(
                             Thing.concept_id == id,
@@ -327,7 +332,6 @@ class SQLAlchemyProvider(VocabularyProvider):
                 ret += self._expand_recurse(n)
         return list(set(ret))
 
-    @session_factory('session_maker')
     def _expand_visit(self, thing):
         if thing.type == 'collection':
             ret = []
@@ -355,7 +359,6 @@ class SQLAlchemyProvider(VocabularyProvider):
             ret = [id[0] for id in ids]
         return list(set(ret))
 
-    @session_factory('session_maker')
     def get_top_display(self, **kwargs):
         '''
         Returns all concepts or collections that form the top-level of a display
@@ -369,7 +372,8 @@ class SQLAlchemyProvider(VocabularyProvider):
             the `**kwargs` parameter, the default language of the provider 
             and falls back to `en` if nothing is present.
         '''
-        tco = self.session\
+        session = self._get_session()
+        tco = session\
                   .query(ConceptModel)\
                   .options(joinedload('labels'))\
                   .filter(
@@ -377,7 +381,7 @@ class SQLAlchemyProvider(VocabularyProvider):
                     ConceptModel.broader_concepts == None,
                     ConceptModel.member_of == None
                   ).all()
-        tcl = self.session\
+        tcl = session\
                   .query(CollectionModel)\
                   .options(joinedload('labels'))\
                   .filter(
@@ -391,7 +395,6 @@ class SQLAlchemyProvider(VocabularyProvider):
         sort_order = self._get_sort_order(**kwargs)
         return [self._get_id_and_label(c, lan) for c in self._sort(res, sort, lan, sort_order=='desc')]
 
-    @session_factory('session_maker')
     def get_children_display(self, id, **kwargs):
         '''
         Return a list of concepts or collections that should be displayed
@@ -404,8 +407,9 @@ class SQLAlchemyProvider(VocabularyProvider):
             and falls back to `en` if nothing is present. If the id does not 
             exist, return `False`.
         '''
+        session = self._get_session()
         try:
-            thing = self.session\
+            thing = session\
                         .query(Thing)\
                         .filter(
                             Thing.concept_id == int(id),
@@ -425,3 +429,38 @@ class SQLAlchemyProvider(VocabularyProvider):
         sort = self._get_sort(**kwargs)
         sort_order = self._get_sort_order(**kwargs)
         return [self._get_id_and_label(c, lan) for c in self._sort(res, sort, lan, sort_order=='desc')]
+
+    def clear_resources(self):
+        self.session_maker = None
+        self.session = None
+
+    def set_resources(self, resources):
+        for k,v in resources.items():
+            if k.isOrExtends(ISQLAlchemyResource):
+                self.session_maker = v
+                self.session = None
+                break
+
+    def register_resource(self, resource, interface):
+        try:
+            if interface.isOrExtends(ISQLAlchemyResource):
+                self.session_maker = resource
+                self.session = None
+        except Exception as e:
+            for intf in interface:
+                if intf.isOrExtends(ISQLAlchemyResource):
+                    self.session_maker = resource
+                    self.session = None
+                    break
+
+    def _get_session(self):
+        if self.session:
+            return self.session
+        if self.session_maker:
+            self.session = self.session_maker()
+            return self.session
+        else:
+            raise ResourceUnavailableException(
+                'No SQLAlchemy session maker present.'
+            )
+
